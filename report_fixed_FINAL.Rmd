@@ -1,0 +1,242 @@
+---
+title: "DM Report"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## About the Data 
+
+
+
+
+## Importing and Wrangling the Data 
+
+The dataset is saved as a number of json objects, we use the jsonlite package to read in the data as a dataframe. 
+
+```{r import}
+library("jsonlite")
+library(magrittr)
+
+comments.df <-  stream_in(file("http://files.pushshift.io/reddit/comments/sample_data.json"))
+attach(comments.df)
+
+#head(comments.df)
+```
+
+Most of the data and NA cells populated correctly, but some need to be adjusted first. 
+
+Some of the values populated as a blank character ("") and some populated as NA values. 
+Replace all blank characters so that they read as NA values instead. 
+```{r setNA}
+comments.df[comments.df==""] <- NA
+```
+
+The author_cakeday column is full of NA or True values, adjust this to be true and false. 
+```{r setTF}
+comments.df[is.na(author_cakeday), "author_cakeday" ] <- FALSE
+```
+
+
+We may want to work only with the comments that are still available, and filter out deleted or removed comments. 
+The data frame not.deleted consists of only comments which have a valid (that is, not deleted or removed) comment body. 
+```{r Filtered}
+not.deleted <- comments.df[body != "[deleted]" & body != "[removed]",]
+```
+
+## Data quality analysis 
+ 
+The following function gets the proportion of completed entries in a given data frame column. 
+```{r prop_compeleted}
+get.completeness <- function(df_col){
+  total <- length(df_col)
+  incomplete <- 0
+  
+  empty.values <- list("", " ", "?", "NULL", "null", "NA", "N/A", "[Not Available]")
+  
+  for (i in 1:length(df_col)){
+    cell <- df_col[i]
+    if (cell %in% empty.values | is.na(cell) )
+      incomplete <- incomplete +1
+  }
+  
+  return( paste("Completion rate:", 1 - (incomplete/total)))
+}
+
+null.checks <- list(distinguished, author_flair_css_class, author_flair_text, author_cakeday)
+lapply(null.checks, get.completeness)
+```
+
+This modified version of the completeness function checks how many entries of a column have been deleted or removed (particularly, for the author and body columns). 
+```{r count_deleted}
+check.deleted <- function(col){
+  total <- length(col)
+  deleted <- 0
+  
+  deleted.list <- list("[deleted]", "[removed]")
+  
+  for (i in 1:length(col)){
+    cell <- col[i]
+    if (cell %in% deleted.list | is.na(cell) )
+      deleted <- deleted +1
+  }
+  
+  return( paste("Deletion rate:", (deleted/total)))
+  
+}
+
+deleted.checks <- list(author, body) 
+
+lapply(deleted.checks,check.deleted)
+```
+
+## Plots and Graphics 
+
+
+### Score vs Controversiality
+#### Score vs Contr. Scatterplot 
+```{r score_controversial}
+plot(score, controversiality,
+     xlab = "comment score",
+     ylab = "controversiality rating")
+
+plot(score[score<200], controversiality[score<200],
+     xlab = "Comment Score",
+     ylab = "Controversiality Rating")
+```
+
+#### Score Boxplot / Boxplot by controversiality
+The boxplots of the score variable show that the scores variable is mostly outliers of the dataset (by R's calculation): the values are mostly in the range [-2,-6]. 
+```{r score_box}
+boxplot(score)
+boxplot(score[score < 200])
+boxplot(score[abs(score)< 15])
+
+summary(score)
+```
+
+A look at the frequency table shows that the most commonly occurring comment scores are in the range of [0,9]. 
+```{r score_freq}
+library("dplyr")
+
+#View(table(data$score))
+
+scores.freq <- table(score) %>%
+  as.data.frame() %>%
+  arrange(desc(Freq))
+  
+head(scores.freq, n=10)
+```
+
+#### Score vs Contr.Vioplots
+```{r score_vs_contr}
+library(vioplot)
+
+vioplot(score[controversiality==0], score[controversiality==1], names=c("Not Controversial", "Controversial"))
+
+
+vioplot(
+  score[abs(score)<40],
+  score[controversiality==0 & abs(score)<40], 
+  score[controversiality==1 & abs(score)<40], 
+  names=c("Overall", "Not Controversial", "Controversial"),
+  ylab = "Score")
+
+```
+
+```{r score_v_contr2}
+vioplot(score[controversiality==0 & abs(score) <= 100], col = "lightblue", side="left", ylab = " Score")
+vioplot(score[controversiality==1& abs(score) <= 100], col = "palevioletred", side="right", add=TRUE)
+legend("topleft", fill = c("lightblue", "palevioletred"), legend = c("Not Controversial", "Controversial"), title = "Controversiality")
+```
+
+
+#### Score vs Contr. Histogram? (may not include this one, depends) 
+```{r score_v_contr_hist}
+library(ggplot2)
+
+comments.df[score>=0 & score<=10, ] %>%
+  group_by(score, controversiality) %>%
+  ggplot(aes(x = score[score<=10 & score >=-2], group = controversiality, fill = controversiality)) +
+  geom_bar(stat = "count") 
+
+comments.df[score <= 50 & score >= -25, ] %>%
+  count(score, controversiality) %>%
+  group_by(score) %>%
+  mutate(pct=prop.table(n)*100) %>%
+  ggplot() + aes(score, pct, fill=controversiality) +
+  geom_bar(stat="identity" ) 
+```
+
+```{r search_function}
+
+search_function <-function(search_term){
+greppyboy = c()
+greppyboy <- grepl(search_term, not.deleted$body)
+not.deleted$body[greppyboy]
+}
+
+search_function("incel")
+
+
+```
+
+
+```{r seperate_words}
+
+library(tm)
+library(wordcloud)
+
+all_words <-not.deleted$body[1:nrow(not.deleted)]
+
+all_words <- Corpus(VectorSource(all_words))
+
+all_words <- all_words %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+all_words <- tm_map(all_words, content_transformer(tolower))
+all_words <- tm_map(all_words, removeWords, stopwords("english"))
+
+
+dtm <- TermDocumentMatrix(all_words) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+# words
+## adapted from https://towardsdatascience.com/create-a-word-cloud-with-r-bde3e7422e8a
+
+
+
+
+```
+
+```{r word_frequency_top15}
+top_words<- df[order(-df$freq),]
+top15 <- top_words[1:15,]
+
+ggplot(data=top15,aes(x=reorder(word,-freq), y=freq),) + 
+  geom_bar(stat="identity") + 
+  scale_x_discrete(name="Top 15 Words")
+
+```
+
+```{r wordcloud}
+
+set.seed(420666) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 3,           
+max.words=150, random.order=FALSE, rot.per=0.35,
+colors=brewer.pal(8, "Dark2"))
+
+
+```
+
+```{r length score}
+
+ggplot(not.deleted, aes(nchar(body),score)) + 
+  geom_point()
+```
